@@ -134,6 +134,7 @@ ld-options:
          , "-Wl,-u,_hs_atomic_add8"
          , "-Wl,-u,_hs_atomic_add16"
          , "-Wl,-u,_hs_atomic_add32"
+         , "-Wl,-u,_stopHeapProfTimer"
 #if WORD_SIZE_IN_BITS == 64
          , "-Wl,-u,_hs_atomic_add64"
 #endif
@@ -244,6 +245,8 @@ ld-options:
          , "-Wl,-u,base_GHCziWord_W32zh_con_info"
          , "-Wl,-u,base_GHCziWord_W64zh_con_info"
          , "-Wl,-u,base_GHCziStable_StablePtr_con_info"
+         , "-Wl,-u,stopHeapProfTimer"
+
 
          , "-Wl,-u,hs_atomic_add8"
          , "-Wl,-u,hs_atomic_add16"
