@@ -513,7 +513,8 @@ data HsExpr p
         rdupd_ext :: XRecordDotUpd p
       , rdupd_expr :: LHsExpr p
       , rdupd_upds :: [LHsRecUpdProj p]
-      , rdupd_get_set_field :: Maybe (IdP p, IdP p)
+      , rdupd_get_field :: Maybe (IdP p)
+      , rdupd_set_field :: Maybe (IdP p)
       , rdupd_setField :: LHsExpr p -- Desugared equivalent 'setField' term.
       }
   -- ^ @Just id@ means @RebindableSyntax@ is in use and gives the ids
@@ -532,7 +533,7 @@ data HsExpr p
         proj_ext :: XProjection p
       , proj_flds :: [Located FastString]
       , proj_get_field :: Maybe (IdP p)
-      , proj_proj :: LHsExpr p -- Desugared equivalent 'getField' term.
+      , proj_circ :: Maybe (IdP p)
       }
   -- ^ @Just id@ means @RebindableSyntax@ is in use and gives the id
   --   of the in-scope 'getField'.

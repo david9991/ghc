@@ -215,44 +215,45 @@ rnExpr (NegApp _ e _)
 
 rnExpr (GetField x e f _)
   = do { rebindable_on <- xoptM LangExt.RebindableSyntax
-       ; (e', fvs) <- rnLExpr e
+       ; (e, fvs) <- rnLExpr e
        ; if rebindable_on
          then do {
            getField <- lookupOccRn (mkVarUnqual (fsLit "getField"))
-         ; return (GetField x e' f (Just getField), fvs `plusFV` unitFV getField)
+         ; return (GetField x e f (Just getField), fvs `plusFV` unitFV getField)
          }
-         else return (GetField x e' f Nothing, fvs)
+         else return (GetField x e f Nothing, fvs)
        }
 
-rnExpr (Projection x fs _ p)
-  = do { rebindable_on <- xoptM LangExt.RebindableSyntax
-       ; (p', fv) <- rnLExpr p
+rnExpr (Projection x fs _ _)
+  = do { circ <- lookupOccRn compose_RDR -- Desugaring uses '.' (function composition).
+       ; rebindable_on <- xoptM LangExt.RebindableSyntax
        ; if rebindable_on
          then do {
            getField <- lookupOccRn (mkVarUnqual (fsLit "getField"))
-         ; return (Projection x fs (Just getField) p', fv)
+         ; return (Projection x fs (Just getField) (Just circ), mkFVs [getField, circ])
          }
-         else return (Projection x fs Nothing p', fv)
+         else return (Projection x fs Nothing (Just circ), unitFV circ)
        }
 
-rnExpr (RecordDotUpd x e us _ f)
+rnExpr (RecordDotUpd x e us _ _ f)
   = do { rebindable_on <- xoptM LangExt.RebindableSyntax
-       ; (e', _) <- rnLExpr e
-       ; us' <- map fst <$> mapM rnRecUpdProj us
-       ; (f', fv) <- rnLExpr f
+       ; (e, fv_e) <- rnLExpr e
+       ; (us, fv_us) <- unzip <$> mapM rnRecUpdProj us
+       ; (f, _) <- rnLExpr f
        ; if rebindable_on
          then do {
            getField <- lookupOccRn (mkVarUnqual (fsLit "getField"))
          ; setField <- lookupOccRn (mkVarUnqual (fsLit "setField"))
-         ; return (RecordDotUpd x e' us'(Just (getField, setField)) f', fv)
+         ; return (RecordDotUpd x e us (Just getField) (Just setField) f
+                  , plusFVs $ mkFVs [getField, setField] : fv_e : fv_us)
          }
-         else return (RecordDotUpd x e' us' Nothing f', fv)
+         else return (RecordDotUpd x e us Nothing Nothing f, plusFVs $ fv_e : fv_us)
        }
   where
     rnRecUpdProj :: LHsRecUpdProj GhcPs -> RnM (LHsRecUpdProj GhcRn, FreeVars)
     rnRecUpdProj (L l (ProjUpdate fs arg)) = do
-      (arg', fv) <- rnLExpr arg
-      return $ (L l (ProjUpdate { pu_flds = fs, pu_arg = arg' }), fv)
+      (arg, fv) <- rnLExpr arg
+      return $ (L l (ProjUpdate { pu_flds = fs, pu_arg = arg }), fv)
 
 
 ------------------------------------------
