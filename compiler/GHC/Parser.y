@@ -2729,8 +2729,8 @@ fexp    :: { ECP }
                    L _ (HsApp _ f arg) | not $ isGetField f ->
                      let l = comb2 arg $3 in
                      L (getLoc f `combineSrcSpans` l)
-                       (HsApp noExtField f (mkGetField l arg $3))
-                   _ -> mkGetField (comb2 $1 $>) $1 $3) [mj AnnDot $2] }
+                       (HsApp noExtField f (mkRdrGetField l arg $3))
+                   _ -> mkRdrGetField (comb2 $1 $>) $1 $3) [mj AnnDot $2] }
 
         | aexp                       { $1 }
 
@@ -2859,7 +2859,7 @@ aexp2   :: { ECP }
         | '(' projection ')'            { ECP $
                                             let (loc, (anns, fIELDS)) = $2
                                                 span = combineSrcSpans (combineSrcSpans (getLoc $1) loc) (getLoc $3)
-                                                expr = mkProjection span (reverse fIELDS)
+                                                expr = mkRdrProjection span (reverse fIELDS)
                                             in amms (ecpFromExp' expr) ([mop $1] ++ reverse anns ++ [mcp $3])
                                         }
 
