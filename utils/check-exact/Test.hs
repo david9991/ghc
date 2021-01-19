@@ -1,5 +1,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 import Data.List
 import Data.Data
@@ -28,6 +30,11 @@ import qualified Parsers as P
 -- exactPrint = undefined
 -- showPprUnsafe = undefined
 
+import GHC.Parser.Lexer
+import GHC.Data.FastString
+import GHC.Types.SrcLoc
+import GHC
+
 -- ---------------------------------------------------------------------
 
 tt :: IO ()
@@ -48,10 +55,10 @@ tt = testOneFile "/home/alanz/mysrc/git.haskell.org/worktree/exactprint/_build/s
  -- "cases/LetIn1.hs" changeLetIn1
  -- "cases/WhereIn4.hs" changeWhereIn4
  -- "cases/AddDecl1.hs" changeAddDecl1
- -- "cases/AddDecl2.hs" changeAddDecl2
+ "cases/AddDecl2.hs" changeAddDecl2
  -- "cases/AddDecl3.hs" changeAddDecl3
  -- "cases/LocalDecls.hs" changeLocalDecls
- "cases/LocalDecls2.hs" changeLocalDecls2
+ -- "cases/LocalDecls2.hs" changeLocalDecls2
  -- "cases/WhereIn3a.hs" changeWhereIn3a
  -- "cases/WhereIn3b.hs" changeWhereIn3b
  -- "cases/AddLocalDecl1.hs" addLocaLDecl1
@@ -79,10 +86,15 @@ main = do
    [libdir,fileName] -> testOneFile libdir fileName noChange
    _ -> putStrLn usage
 
+deriving instance Data Token
+deriving instance Data PsSpan
+deriving instance Data BufSpan
+deriving instance Data BufPos
+
 testOneFile :: FilePath -> String -> Changer -> IO ()
 testOneFile libdir fileName changer = do
-       p <- parseOneFile libdir fileName
-       -- putStrLn $ "\n\ngot p"
+       (p,toks) <- parseOneFile libdir fileName
+       putStrLn $ "\n\ngot p" ++ showAst (take 4 $ reverse toks)
        let
          origAst = ppAst (pm_parsed_source p)
          anns'   = pm_annotations p
@@ -108,7 +120,7 @@ testOneFile libdir fileName changer = do
 
        -- putStrLn $ "anns':" ++ showPprUnsafe (apiAnnRogueComments anns')
 
-       p' <- parseOneFile libdir newFile
+       (p',_) <- parseOneFile libdir newFile
 
        let newAstStr :: String
            newAstStr = ppAst (pm_parsed_source p')
@@ -145,7 +157,7 @@ testOneFile libdir fileName changer = do
 
 ppAst ast = showSDocUnsafe $ showAstData BlankSrcSpanFile NoBlankApiAnnotations ast
 
-parseOneFile :: FilePath -> FilePath -> IO ParsedModule
+parseOneFile :: FilePath -> FilePath -> IO (ParsedModule, [Located Token])
 parseOneFile libdir fileName = do
        let modByFile m =
              case ml_hs_file $ ms_location m of
@@ -165,7 +177,11 @@ parseOneFile libdir fileName = do
                      [x] -> x
                      xs -> error $ "Can't find module, got:"
                               ++ show (map (ml_hs_file . ms_location) xs)
-         GHC.parseModule modSum
+         pm <- GHC.parseModule modSum
+         toks <- getTokenStream (ms_mod modSum)
+         return (pm, toks)
+
+         -- getTokenStream :: GhcMonad m => Module -> m [Located Token]
 
 -- getPragmas :: ApiAnns -> String
 -- getPragmas anns' = pragmaStr
@@ -283,9 +299,10 @@ changeAddDecl2 :: Changer
 changeAddDecl2 libdir ans top = do
   Right (declAnns, decl) <- withDynFlags libdir (\df -> parseDecl df "<interactive>" "nn = n2")
   let decl' = setEntryDP' decl (DP (2,0))
+  let top' = anchorEof top
 
   let (p',(ans',_),_) = runTransform mempty doAddDecl
-      doAddDecl = everywhereM (mkM replaceTopLevelDecls) top
+      doAddDecl = everywhereM (mkM replaceTopLevelDecls) top'
       replaceTopLevelDecls :: ParsedSource -> Transform ParsedSource
       replaceTopLevelDecls m = insertAtEnd m decl'
   return (ans,p')
@@ -297,7 +314,9 @@ changeAddDecl3 libdir ans top = do
 
   let (p',(ans',_),_) = runTransform mempty doAddDecl
       doAddDecl = everywhereM (mkM replaceTopLevelDecls) top
-      f d (l1:ls) = l1:d:ls
+      f d (l1:l2:ls) = l1:d:l2':ls
+        where
+          l2' = setEntryDP' l2 (DP (2,0))
       replaceTopLevelDecls :: ParsedSource -> Transform ParsedSource
       replaceTopLevelDecls m = insertAt f m decl'
   return (ans,p')
@@ -310,7 +329,7 @@ changeLocalDecls libdir ans (L l p) = do
   Right (declAnns, d@(L ld (ValD _ decl))) <- withDynFlags libdir (\df -> parseDecl df "decl" "nn = 2")
   Right (sigAnns, s@(L ls (SigD _ sig)))   <- withDynFlags libdir (\df -> parseDecl df "sig"  "nn :: Int")
   let decl' = setEntryDP' (L ld decl) (DP (1, 0))
-  let  sig' = setEntryDP' (L ls sig) (DP (1, 5))
+  let  sig' = setEntryDP' (L ls sig) (DP (0, 0))
   let (p',(ans',_),_w) = runTransform mempty doAddLocal
       doAddLocal = everywhereM (mkM replaceLocalBinds) p
       replaceLocalBinds :: LMatch GhcPs (LHsExpr GhcPs)
@@ -319,12 +338,13 @@ changeLocalDecls libdir ans (L l p) = do
         let oldDecls = sortLocatedA $ map wrapDecl (bagToList binds) ++ map wrapSig sigs
         let decls = s:d:oldDecls
         let oldDecls' = captureLineSpacing oldDecls
-        let oldBinds = concatMap decl2Bind oldDecls'
-            oldSigs  = concatMap decl2Sig  oldDecls'
+        let oldBinds     = concatMap decl2Bind oldDecls'
+            (os:oldSigs) = concatMap decl2Sig  oldDecls'
+            os' = setEntryDP' os (DP (2, 0))
         let sortKey = captureOrder' decls
         let binds' = (HsValBinds van
                           (ValBinds sortKey (listToBag $ decl':oldBinds)
-                                          (sig':oldSigs)))
+                                          (sig':os':oldSigs)))
         return (L lm (Match an mln pats (GRHSs noExtField rhs binds')))
       replaceLocalBinds x = return x
   return (ans,L l p')
@@ -338,16 +358,17 @@ changeLocalDecls2 libdir ans (L l p) = do
   Right (_, d@(L ld (ValD _ decl))) <- withDynFlags libdir (\df -> parseDecl df "decl" "nn = 2")
   Right (_, s@(L ls (SigD _ sig)))  <- withDynFlags libdir (\df -> parseDecl df "sig"  "nn :: Int")
   let decl' = setEntryDP' (L ld decl) (DP (1, 0))
-  let  sig' = setEntryDP' (L ls  sig) (DP (1, 5))
+  let  sig' = setEntryDP' (L ls  sig) (DP (0, 2))
   let (p',(ans',_),_w) = runTransform mempty doAddLocal
       doAddLocal = everywhereM (mkM replaceLocalBinds) p
       replaceLocalBinds :: LMatch GhcPs (LHsExpr GhcPs)
                         -> Transform (LMatch GhcPs (LHsExpr GhcPs))
       replaceLocalBinds m@(L lm (Match ma mln pats (GRHSs _ rhs EmptyLocalBinds{}))) = do
         newSpan <- uniqueSrcSpanT
-        let anc = (Anchor (rs newSpan) (MovedAnchor (DP (1,3))))
+        let anc = (Anchor (rs newSpan) (MovedAnchor (DP (1,2))))
         let an = ApiAnn anc
-                        (AnnList (Just anc) Nothing Nothing [(undeltaSpan (rs newSpan) AnnWhere (DP (0,0)))] [])
+                        (AnnList (Just anc) Nothing Nothing
+                                 [(undeltaSpan (rs newSpan) AnnWhere (DP (0,0)))] [])
                         noCom
         let decls = [s,d]
         let sortKey = captureOrder' decls
@@ -507,3 +528,5 @@ mkT :: (Typeable a, Typeable b) => (b -> b) -> (a -> a)
 mkT f = case cast f of
     Just f' -> f'
     Nothing -> id
+
+-- ---------------------------------------------------------------------

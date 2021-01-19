@@ -858,7 +858,7 @@ data Token
   | ITunknown String             -- ^ Used when the lexer can't make sense of it
   | ITeof                        -- ^ end of file token
 
-  -- Documentation annotations
+  -- Documentation annotations. See Note [PsSpan in Comments]
   | ITdocCommentNext  String     PsSpan -- ^ something beginning @-- |@
   | ITdocCommentPrev  String     PsSpan -- ^ something beginning @-- ^@
   | ITdocCommentNamed String     PsSpan -- ^ something beginning @-- $@
@@ -871,6 +871,24 @@ data Token
 
 instance Outputable Token where
   ppr x = text (show x)
+
+{- Note [PsSpan in Comments]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+When using the Api Annotations to exact print a modified AST, managing
+the space before a comment is important.  The PsSpan in the comment
+token allows this to happen.
+
+We also need to track the space before the end of file. The normal
+mechanism of using the previous token does not work, as the ITeof is
+synthesised to come at the same location of the last token, and the
+normal previous token updating has by then updated the required
+location.
+
+We track this using a 2-back location, prev_loc2. This adds extra
+processing to every single token, which is a performance hit for
+something needed only at the end of the file. This needs
+improving. Perhaps a backward scan on eof?
+-}
 
 {- Note [Minus tokens]
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -2267,7 +2285,9 @@ data PState = PState {
         tab_first  :: Maybe RealSrcSpan, -- pos of first tab warning in the file
         tab_count  :: !Word,             -- number of tab warnings in the file
         last_tk    :: Maybe (PsLocated Token), -- last non-comment token
-        prev_loc   :: PsSpan,      -- pos of previous token, including comments
+        prev_loc   :: PsSpan,      -- pos of previous token, including comments,
+        prev_loc2  :: PsSpan,      -- pos of two back token, including comments,
+                                   -- see Note [PsSpan in Comments]
         last_loc   :: PsSpan,      -- pos of current token
         last_len   :: !Int,        -- len of current token
         loc        :: PsLoc,       -- current loc (end of prev token + 1)
@@ -2297,7 +2317,7 @@ data PState = PState {
         -- locations of 'noise' tokens in the source, so that users of
         -- the GHC API can do source to source conversions.
         -- See note [Api annotations] in GHC.Parser.Annotation
-        eof_pos :: Maybe RealSrcSpan,
+        eof_pos :: Maybe (RealSrcSpan, RealSrcSpan), -- pos, gap to prior token
         header_comments :: Maybe [LAnnotationComment],
         comment_q :: [LAnnotationComment],
 
@@ -2385,8 +2405,8 @@ getParsedLoc  = P $ \s@(PState{ loc=loc }) -> POk s loc
 addSrcFile :: FastString -> P ()
 addSrcFile f = P $ \s -> POk s{ srcfiles = f : srcfiles s } ()
 
-setEofPos :: RealSrcSpan -> P ()
-setEofPos span = P $ \s -> POk s{ eof_pos = Just span } ()
+setEofPos :: RealSrcSpan -> RealSrcSpan -> P ()
+setEofPos span gap = P $ \s -> POk s{ eof_pos = Just (span, gap) } ()
 
 setLastToken :: PsSpan -> Int -> P ()
 setLastToken loc len = P $ \s -> POk s {
@@ -2396,16 +2416,23 @@ setLastToken loc len = P $ \s -> POk s {
 
 setLastTk :: PsLocated Token -> P ()
 setLastTk tk@(L l _) = P $ \s -> POk s { last_tk = Just tk
-                                       , prev_loc = l } ()
+                                       , prev_loc = l
+                                       , prev_loc2 = prev_loc s} ()
 
 setLastComment :: PsLocated Token -> P ()
-setLastComment (L l _) = P $ \s -> POk s { prev_loc = l } ()
+setLastComment (L l _) = P $ \s -> POk s { prev_loc = l
+                                         , prev_loc2 = prev_loc s} ()
 
 getLastTk :: P (Maybe (PsLocated Token))
 getLastTk = P $ \s@(PState { last_tk = last_tk }) -> POk s last_tk
 
+-- see Note [PsSpan in Comments]
 getLastLocComment :: P PsSpan
 getLastLocComment = P $ \s@(PState { prev_loc = prev_loc }) -> POk s prev_loc
+
+-- see Note [PsSpan in Comments]
+getLastLocEof :: P PsSpan
+getLastLocEof = P $ \s@(PState { prev_loc2 = prev_loc2 }) -> POk s prev_loc2
 
 getLastLoc :: P PsSpan
 getLastLoc = P $ \s@(PState { last_loc = last_loc }) -> POk s last_loc
@@ -2775,6 +2802,7 @@ initParserState options buf loc =
       tab_count     = 0,
       last_tk       = Nothing,
       prev_loc      = mkPsSpan init_loc init_loc,
+      prev_loc2     = mkPsSpan init_loc init_loc,
       last_loc      = mkPsSpan init_loc init_loc,
       last_len      = 0,
       loc           = init_loc,
@@ -2884,7 +2912,7 @@ getFinalCommentsFor :: (MonadP m) => SrcSpan -> m ApiAnnComments
 getFinalCommentsFor (RealSrcSpan l _) = allocateFinalCommentsP l
 getFinalCommentsFor _ = return noCom
 
-getEofPos :: P (Maybe RealSrcSpan)
+getEofPos :: P (Maybe (RealSrcSpan, RealSrcSpan))
 getEofPos = P $ \s@(PState { eof_pos = pos }) -> POk s pos
 
 addTabWarning :: RealSrcSpan -> P ()
@@ -3238,7 +3266,8 @@ lexToken = do
   case alexScanUser exts inp sc of
     AlexEOF -> do
         let span = mkPsSpan loc1 loc1
-        setEofPos (psRealSpan span)
+        lt <- getLastLocEof
+        setEofPos (psRealSpan span) (psRealSpan lt)
         setLastToken span 0
         return (L span ITeof)
     AlexError (AI loc2 buf) ->
@@ -3446,6 +3475,7 @@ commentToAnnotation (L l (ITlineComment s ll))     = mkLAnnotationComment l ll (
 commentToAnnotation (L l (ITblockComment s ll))    = mkLAnnotationComment l ll (AnnBlockComment s)
 commentToAnnotation _                           = panic "commentToAnnotation"
 
+-- see Note [PsSpan in Comments]
 mkLAnnotationComment :: RealSrcSpan -> PsSpan -> AnnotationCommentTok -> LAnnotationComment
 mkLAnnotationComment l ll tok = L (realSpanAsAnchor l) (AnnComment tok (psRealSpan ll))
 

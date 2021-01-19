@@ -70,6 +70,7 @@ module Transform
         , balanceCommentsList
         , balanceTrailingComments
         , moveTrailingComments
+        , anchorEof
 
         -- ** Managing lists, pure functions
         , captureOrder, captureOrder'
@@ -708,7 +709,6 @@ splitComments p (AnnCommentsBalanced cs ts) = AnnCommentsBalanced cs' ts'
 -- original locations.
 commentOrigDeltas :: [LAnnotationComment] -> [LAnnotationComment]
 commentOrigDeltas [] = []
--- commentOrigDeltas ls = ls
 commentOrigDeltas ls@(L _ (GHC.AnnComment _ p):_) = go p ls
   -- TODO:AZ: we now have deltas wrt *all* tokens, not just preceding
   -- non-comment. Simplify this.
@@ -796,6 +796,13 @@ moveTrailingComments first second = do
         ans' = Map.insert k1 an1' $ Map.insert k2 an2' ans
 
   modifyAnnsT moveComments
+
+-- ---------------------------------------------------------------------
+
+anchorEof :: ParsedSource -> ParsedSource
+anchorEof (L l m@(HsModule an _lo _mn _exps _imps _decls _ _)) = L l (m { hsmodAnn = an' })
+  where
+    an' = addCommentOrigDeltasAnn an
 
 -- ---------------------------------------------------------------------
 
