@@ -95,7 +95,6 @@ import GHC.Core.DataCon
 import GHC.Driver.Ppr
 import GHC.Data.Maybe
 import qualified Data.List.NonEmpty as NE
-import Control.Monad ( when )
 
 
 -------------------------------------------------------------------------
@@ -299,18 +298,8 @@ emitRODataLits :: CLabel -> [CmmLit] -> FCode ()
 emitRODataLits lbl lits = emitDecl (mkRODataLits lbl lits)
 
 emitDataCon :: CLabel -> CmmInfoTable -> CostCentreStack -> [CmmLit] -> FCode ()
-emitDataCon lbl itbl ccs payload = do
-  addUsedDataConInfo itbl
+emitDataCon lbl itbl ccs payload =
   emitDecl (CmmData (Section Data lbl) (CmmStatics lbl itbl ccs payload))
-
-addUsedDataConInfo :: CmmInfoTable -> FCode ()
-addUsedDataConInfo cmm_itbl
-  = do  { dflags <- getDynFlags
-        ; when (gopt Opt_InfoTableMap dflags) $ do {
-          ; state <- getState
-          ; setState $ addUsedInfo cmm_itbl state } }
-
-
 
 newStringCLit :: String -> FCode CmmLit
 -- Make a global definition for the string,
