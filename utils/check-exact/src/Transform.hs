@@ -720,9 +720,12 @@ commentOrigDeltas ls@(L _ (GHC.AnnComment _ p):_) = go p ls
       where
         p' = p
         (r,c) = ss2posEnd pp
-        op = if r == 0
+        op' = if r == 0
                then MovedAnchor (ss2delta (r,c+1) la)
                else MovedAnchor (ss2delta (r,c)   la)
+        op = if t == AnnEofComment && op' == MovedAnchor (DP (0,0))
+               then MovedAnchor (DP (1,0))
+               else op'
 
 addCommentOrigDeltas :: ApiAnnComments -> ApiAnnComments
 addCommentOrigDeltas (AnnComments cs) = AnnComments (commentOrigDeltas cs)
@@ -1229,7 +1232,7 @@ replaceDeclsValbinds (HsIPBinds {}) _new    = error "undefined replaceDecls HsIP
 replaceDeclsValbinds (EmptyLocalBinds _) new
     = do
         logTr "replaceDecls HsLocalBinds"
-        an <- whereAnnotation (DP (0,0))
+        an <- whereAnnotation (DP (1,4))
         let newBinds = concatMap decl2Bind new
             newSigs  = concatMap decl2Sig  new
         let decs = listToBag $ newBinds
