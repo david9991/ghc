@@ -497,9 +497,10 @@ lookupRecFieldOcc mb_con rdr_name
                            -- scope (with the correct qualifier if
                            -- there is one, hence calling pickGREs).
                            gre <- lookupGRE_FieldLabel env fl
-                           guard (not (isQual rdr_name
-                                         && null (pickGREs rdr_name [gre])))
-                           return (fl, gre)
+                           if isQual rdr_name
+                             then do gre' <- listToMaybe (pickGREs rdr_name [gre])
+                                     return (fl, gre')
+                              else return (fl, gre)
        ; case mb_field of
            Just (fl, gre) -> do { addUsedGRE True gre
                                 ; return (flSelector fl) }
